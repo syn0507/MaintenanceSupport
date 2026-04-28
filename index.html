@@ -125,6 +125,27 @@
     font-family: 'Share Tech Mono', monospace;
   }
 
+  .hud-buttons {
+    position: fixed;
+    bottom: 4%;
+    left: 50%; transform: translateX(-50%);
+    display: flex; gap: 10px;
+  }
+  .hud-btn {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    background: none;
+    border: 1px solid var(--green-faint);
+    color: var(--green-dim);
+    padding: 5px 12px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+    border-radius: 2px;
+  }
+  .hud-btn:hover { border-color: var(--green-dim); color: var(--green); }
+  .hud-btn.active { border-color: var(--green); color: var(--green); box-shadow: 0 0 8px var(--green-glow); }
+
   /* ─── LEFT: CHECKLIST ─── */
   #screen-left {
     background: var(--bg);
@@ -542,6 +563,12 @@
 <!-- Angle debug -->
 <div class="angle-display" id="angle-display" style="display:none;"></div>
 
+<!-- HUD buttons: calibrate / flip -->
+<div class="hud-buttons" id="hud-buttons" style="display:none;">
+  <button class="hud-btn" id="btn-calibrate">⊙ 正面を再設定</button>
+  <button class="hud-btn" id="btn-flip">⇄ 左右反転</button>
+</div>
+
 <!-- Demo bar (PC) -->
 <div id="demo-bar">
   <label>🖥 デスクトップデモ：角度をスライダーで調整 &nbsp; <span id="slider-val">0°</span></label>
@@ -558,6 +585,7 @@
   let manualPdfUrl = null;
   let gyroAvailable = false;
   let currentAngle = 0;
+  let flipSign = -1; // 画面内向き固定のためデフォルト反転
 
   /* ─── DOM ─── */
   const screens = {
@@ -582,28 +610,52 @@
   }
 
   function updateFromAngle(angle) {
-    currentAngle = angle;
-    angleDisplay.textContent = `γ: ${Math.round(angle)}°`;
-    if (angle > THRESHOLD) showScreen('right');
-    else if (angle < -THRESHOLD) showScreen('left');
+    const a = angle * flipSign;
+    currentAngle = a;
+    angleDisplay.textContent = `α: ${Math.round(a)}°`;
+    if (a > THRESHOLD) showScreen('right');
+    else if (a < -THRESHOLD) showScreen('left');
     else showScreen('center');
   }
 
   /* ─── GYRO ─── */
+  let alphaBase = null;
+  let lastRawAlpha = 0;
+
+  function calcRelativeAlpha(alpha) {
+    if (alphaBase === null) return 0;
+    let diff = alpha - alphaBase;
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+    return diff;
+  }
+
   function startGyro() {
+    let calibrated = false;
     window.addEventListener('deviceorientation', (e) => {
-      // gamma: left(-90) ~ right(+90) when phone held upright
-      const gamma = e.gamma ?? 0;
-      updateFromAngle(gamma);
+      const alpha = e.alpha ?? 0;
+      lastRawAlpha = alpha;
+
+      if (!calibrated) {
+        alphaBase = alpha;
+        calibrated = true;
+        gyroAvailable = true;
+        angleDisplay.style.display = 'block';
+        document.getElementById('hud-buttons').style.display = 'flex';
+      }
+
+      const rel = calcRelativeAlpha(alpha);
+      updateFromAngle(rel);
     });
-    gyroAvailable = true;
-    angleDisplay.style.display = 'block';
+
+    setTimeout(() => {
+      if (!gyroAvailable) fallbackToDemo();
+    }, 2000);
   }
 
   function initGyro() {
     if (typeof DeviceOrientationEvent !== 'undefined' &&
         typeof DeviceOrientationEvent.requestPermission === 'function') {
-      // iOS 13+
       permScreen.classList.add('show');
       document.getElementById('perm-btn').onclick = () => {
         DeviceOrientationEvent.requestPermission().then(state => {
@@ -614,8 +666,6 @@
       };
     } else if ('DeviceOrientationEvent' in window) {
       startGyro();
-      // If no events come within 2s → demo
-      setTimeout(() => { if (!gyroAvailable) fallbackToDemo(); }, 2000);
     } else {
       fallbackToDemo();
     }
@@ -623,6 +673,7 @@
 
   function fallbackToDemo() {
     demoBar.classList.add('show');
+    document.getElementById('hud-buttons').style.display = 'flex';
     demoSlider.addEventListener('input', () => {
       const v = parseInt(demoSlider.value);
       sliderVal.textContent = v + '°';
@@ -630,6 +681,22 @@
     });
     angleDisplay.style.display = 'block';
   }
+
+  /* ─── CALIBRATE / FLIP BUTTONS ─── */
+  document.getElementById('btn-calibrate').onclick = () => {
+    alphaBase = lastRawAlpha;
+    const btn = document.getElementById('btn-calibrate');
+    btn.classList.add('active');
+    btn.textContent = '✓ 設定完了';
+    setTimeout(() => { btn.classList.remove('active'); btn.textContent = '⊙ 正面を再設定'; }, 1500);
+  };
+
+  document.getElementById('btn-flip').onclick = () => {
+    flipSign *= -1;
+    const btn = document.getElementById('btn-flip');
+    btn.classList.toggle('active', flipSign === -1);
+    btn.textContent = flipSign === -1 ? '⇄ 反転中' : '⇄ 左右反転';
+  };
 
   /* ─── CHECKLIST ─── */
   function parseChecklist(text) {

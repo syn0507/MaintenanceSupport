@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>AR Work Support</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --green: #00ff88;
+    --green-dim: #00aa55;
+    --green-faint: #003322;
+    --green-glow: rgba(0,255,136,0.15);
+    --bg: #000000;
+    --scan-speed: 4s;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 9999;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.18) 2px,
+      rgba(0,0,0,0.18) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* CRT vignette */
+  body::after {
+    content: '';
+    position: fixed; inset: 0; z-index: 9998;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.75) 100%);
+    pointer-events: none;
+  }
+
+  /* ─── SCREENS ─── */
+  .screen {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    opacity: 0;
+    transition: opacity 0.35s ease;
+    pointer-events: none;
+  }
+  .screen.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* ─── CENTER SCREEN ─── */
+  #screen-center {
+    background: var(--bg);
+  }
+  .hud-hint {
+    position: fixed;
+    bottom: 18%;
+    left: 0; right: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 8%;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: clamp(11px, 2.5vw, 14px);
+    color: var(--green-dim);
+    letter-spacing: 0.08em;
+  }
+  .hud-hint .arrow {
+    font-size: clamp(18px, 4vw, 24px);
+    color: var(--green-dim);
+    animation: blink-arrow 1.8s ease-in-out infinite;
+  }
+  .hud-hint .arrow.left { animation-delay: 0s; }
+  .hud-hint .arrow.right { animation-delay: 0.9s; }
+  @keyframes blink-arrow {
+    0%,100% { opacity: 0.3; } 50% { opacity: 1; }
+  }
+
+  .compass {
+    position: fixed;
+    top: 6%;
+    left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 6px;
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(10px, 2vw, 12px);
+    color: var(--green-dim);
+    letter-spacing: 0.15em;
+  }
+  .compass-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%,100% { transform: scale(1); opacity:1; }
+    50% { transform: scale(1.6); opacity:0.6; }
+  }
+
+  /* angle debug */
+  .angle-display {
+    position: fixed;
+    top: 6%;
+    right: 4%;
+    font-size: 11px;
+    color: var(--green-dim);
+    opacity: 0.6;
+    font-family: 'Share Tech Mono', monospace;
+  }
+
+  /* ─── LEFT: CHECKLIST ─── */
+  #screen-left {
+    background: var(--bg);
+    padding: 0;
+    align-items: stretch;
+  }
+  .panel-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--green-dim);
+    flex-shrink: 0;
+  }
+  .panel-title {
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(13px, 3vw, 17px);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--green);
+    text-shadow: 0 0 12px var(--green);
+  }
+  .panel-badge {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--green-dim);
+    border: 1px solid var(--green-dim);
+    padding: 2px 7px;
+    border-radius: 2px;
+  }
+
+  .checklist-wrap {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .checklist-wrap::-webkit-scrollbar { width: 4px; }
+  .checklist-wrap::-webkit-scrollbar-track { background: transparent; }
+  .checklist-wrap::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+
+  .check-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--green-faint);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .check-item:hover { background: var(--green-glow); }
+  .check-item.done .check-label { opacity: 0.4; text-decoration: line-through; }
+  .check-box {
+    width: 18px; height: 18px; flex-shrink: 0;
+    border: 1.5px solid var(--green-dim);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; margin-top: 1px;
+    transition: all 0.2s;
+  }
+  .check-item.done .check-box {
+    border-color: var(--green);
+    color: var(--green);
+    text-shadow: 0 0 6px var(--green);
+    box-shadow: 0 0 8px var(--green-glow);
+  }
+  .check-label {
+    font-size: clamp(13px, 3vw, 15px);
+    line-height: 1.45;
+    color: var(--green);
+    transition: opacity 0.2s;
+  }
+
+  .checklist-footer {
+    padding: 8px 16px 10px;
+    border-top: 1px solid var(--green-faint);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .progress-text { font-size: 11px; color: var(--green-dim); }
+  .progress-bar-wrap {
+    flex: 1; margin: 0 12px;
+    height: 3px; background: var(--green-faint);
+    border-radius: 2px; overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%; background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+  .reset-btn {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px; color: var(--green-dim);
+    background: none; border: 1px solid var(--green-faint);
+    padding: 3px 8px; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .reset-btn:hover { border-color: var(--green-dim); color: var(--green); }
+
+  /* upload area */
+  .upload-zone {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    flex: 1;
+    border: 1px dashed var(--green-dim);
+    margin: 16px;
+    border-radius: 4px;
+    gap: 12px;
+    color: var(--green-dim);
+    text-align: center;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .upload-zone:hover { border-color: var(--green); color: var(--green); background: var(--green-glow); }
+  .upload-zone .upload-icon { font-size: 32px; opacity: 0.6; }
+  .upload-zone p { font-size: 13px; line-height: 1.6; }
+  .upload-zone small { font-size: 11px; opacity: 0.5; }
+  input[type=file] { display: none; }
+
+  /* ─── RIGHT: MANUAL ─── */
+  #screen-right {
+    background: var(--bg);
+    padding: 0;
+    align-items: stretch;
+  }
+  .manual-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .manual-body::-webkit-scrollbar { width: 4px; }
+  .manual-body::-webkit-scrollbar-track { background: transparent; }
+  .manual-body::-webkit-scrollbar-thumb { background: var(--green-dim); border-radius: 2px; }
+
+  .manual-img {
+    max-width: 100%;
+    display: block;
+    border: 1px solid var(--green-faint);
+    margin-bottom: 6px;
+    image-rendering: auto;
+  }
+  .manual-page-label {
+    font-size: 11px; color: var(--green-dim);
+    padding: 4px 0 10px;
+    text-align: center;
+  }
+  .pdf-frame {
+    width: 100%; flex: 1;
+    border: none;
+    background: #111;
+    min-height: 60vh;
+  }
+  .manual-placeholder {
+    flex: 1;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+
+  /* ─── SETUP MODAL ─── */
+  #setup-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.92);
+    z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  .modal-box {
+    width: 100%; max-width: 420px;
+    border: 1px solid var(--green-dim);
+    background: #050f09;
+    box-shadow: 0 0 40px rgba(0,255,136,0.1);
+    padding: 24px 20px;
+  }
+  .modal-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 18px; font-weight: 900;
+    letter-spacing: 0.15em;
+    color: var(--green);
+    text-shadow: 0 0 20px var(--green);
+    margin-bottom: 6px;
+  }
+  .modal-sub {
+    font-size: 11px; color: var(--green-dim);
+    margin-bottom: 20px; letter-spacing: 0.08em;
+  }
+  .modal-section { margin-bottom: 20px; }
+  .modal-label {
+    font-size: 12px; color: var(--green-dim);
+    letter-spacing: 0.1em; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .modal-label::before { content: '//'; opacity: 0.5; }
+
+  .upload-btn-row {
+    display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap;
+  }
+  .upload-file-btn {
+    flex: 1; min-width: 120px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    background: var(--green-faint);
+    color: var(--green);
+    border: 1px solid var(--green-dim);
+    padding: 10px 12px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+    text-align: center;
+  }
+  .upload-file-btn:hover { background: var(--green-glow); border-color: var(--green); box-shadow: 0 0 12px var(--green-glow); }
+  .upload-file-btn.loaded { border-color: var(--green); color: var(--green); box-shadow: 0 0 10px rgba(0,255,136,0.3); }
+
+  .modal-textarea {
+    width: 100%;
+    background: var(--green-faint);
+    border: 1px solid var(--green-dim);
+    color: var(--green);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    padding: 10px;
+    resize: vertical; min-height: 90px;
+    outline: none;
+    transition: border-color 0.2s;
+    line-height: 1.6;
+  }
+  .modal-textarea:focus { border-color: var(--green); box-shadow: 0 0 8px var(--green-glow); }
+  .modal-textarea::placeholder { color: var(--green-dim); opacity: 0.5; }
+
+  .start-btn {
+    width: 100%;
+    font-family: 'Orbitron', monospace;
+    font-size: 15px; font-weight: 700;
+    letter-spacing: 0.2em;
+    background: transparent;
+    color: var(--green);
+    border: 2px solid var(--green);
+    padding: 14px;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.25s;
+    box-shadow: 0 0 20px rgba(0,255,136,0.1);
+    margin-top: 4px;
+  }
+  .start-btn:hover {
+    background: var(--green);
+    color: #000;
+    box-shadow: 0 0 30px rgba(0,255,136,0.4);
+  }
+
+  .modal-note {
+    margin-top: 14px;
+    font-size: 11px; color: var(--green-dim); opacity: 0.6;
+    text-align: center; line-height: 1.7;
+  }
+
+  /* permission screen */
+  #perm-screen {
+    position: fixed; inset: 0; z-index: 2000;
+    background: #000;
+    display: none;
+    flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; padding: 24px; gap: 20px;
+  }
+  #perm-screen.show { display: flex; }
+  .perm-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 20px; font-weight: 900;
+    color: var(--green);
+    text-shadow: 0 0 20px var(--green);
+    letter-spacing: 0.15em;
+  }
+  .perm-text { font-size: 13px; color: var(--green-dim); line-height: 1.8; max-width: 320px; }
+  .perm-btn {
+    font-family: 'Orbitron', monospace;
+    font-size: 14px; font-weight: 700;
+    letter-spacing: 0.15em;
+    background: transparent;
+    color: var(--green); border: 2px solid var(--green);
+    padding: 14px 32px; cursor: pointer;
+    transition: all 0.2s;
+  }
+  .perm-btn:hover { background: var(--green); color: #000; }
+
+  /* demo slider (PC用) */
+  #demo-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    padding: 10px 16px 12px;
+    background: rgba(0,0,0,0.85);
+    border-top: 1px solid var(--green-faint);
+    z-index: 500;
+    display: none;
+    flex-direction: column; gap: 6px;
+  }
+  #demo-bar.show { display: flex; }
+  #demo-bar label { font-size: 11px; color: var(--green-dim); letter-spacing: 0.08em; }
+  #demo-slider { width: 100%; accent-color: var(--green); }
+
+  /* glow pulse on active screen */
+  #screen-left.active, #screen-right.active {
+    animation: screen-glow 3s ease-in-out infinite;
+  }
+  @keyframes screen-glow {
+    0%,100% { box-shadow: inset 0 0 0px transparent; }
+    50% { box-shadow: inset 0 0 30px rgba(0,255,136,0.03); }
+  }
+</style>
+</head>
+<body>
+
+<!-- Permission screen (iOS) -->
+<div id="perm-screen">
+  <div class="perm-title">GYRO ACCESS</div>
+  <div class="perm-text">このアプリはジャイロセンサーを使用します。<br>次の画面で「許可」を選択してください。</div>
+  <button class="perm-btn" id="perm-btn">センサーを許可する</button>
+</div>
+
+<!-- Setup Modal -->
+<div id="setup-modal">
+  <div class="modal-box">
+    <div class="modal-title">AR WORK SUPPORT</div>
+    <div class="modal-sub">// INITIALIZE WORKSPACE</div>
+
+    <div class="modal-section">
+      <div class="modal-label">チェックリスト（左向き）</div>
+      <div class="upload-btn-row">
+        <button class="upload-file-btn" id="btn-upload-checklist" onclick="document.getElementById('input-checklist-txt').click()">
+          📄 テキスト (.txt/.md)
+        </button>
+      </div>
+      <input type="file" id="input-checklist-txt" accept=".txt,.md,.csv">
+      <div style="margin-top:8px;">
+        <textarea class="modal-textarea" id="checklist-text" placeholder="または直接入力（1行に1項目）&#10;例：&#10;安全確認&#10;電源ON&#10;動作チェック"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-label">マニュアル（右向き）</div>
+      <div class="upload-btn-row">
+        <button class="upload-file-btn" id="btn-upload-manual-img" onclick="document.getElementById('input-manual-img').click()">
+          🖼 画像 (JPG/PNG)
+        </button>
+        <button class="upload-file-btn" id="btn-upload-manual-pdf" onclick="document.getElementById('input-manual-pdf').click()">
+          📑 PDF
+        </button>
+      </div>
+      <input type="file" id="input-manual-img" accept=".jpg,.jpeg,.png,.gif,.webp" multiple>
+      <input type="file" id="input-manual-pdf" accept=".pdf">
+    </div>
+
+    <button class="start-btn" id="start-btn">▶ START</button>
+    <div class="modal-note">
+      スマホを胸に縦固定して使用<br>
+      左向き → チェックリスト ／ 右向き → マニュアル
+    </div>
+  </div>
+</div>
+
+<!-- ── CENTER SCREEN ── -->
+<div class="screen active" id="screen-center">
+  <div class="compass">
+    <div class="compass-dot"></div>
+    <span>FRONT</span>
+  </div>
+  <div class="hud-hint">
+    <div>
+      <span class="arrow left">◀</span>
+      <span style="margin-left:6px;">チェックリスト</span>
+    </div>
+    <div style="text-align:right;">
+      <span style="margin-right:6px;">マニュアル</span>
+      <span class="arrow right">▶</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── LEFT SCREEN: CHECKLIST ── -->
+<div class="screen" id="screen-left">
+  <div class="panel-header">
+    <span class="panel-title">CHECKLIST</span>
+    <span class="panel-badge" id="cl-badge">0/0</span>
+  </div>
+  <div class="checklist-wrap" id="checklist-wrap">
+    <div class="upload-zone" id="cl-upload-zone" onclick="document.getElementById('input-cl-live').click()">
+      <div class="upload-icon">☑</div>
+      <p>チェックリストを<br>アップロードまたは直接入力</p>
+      <small>TXT / MD</small>
+    </div>
+    <input type="file" id="input-cl-live" accept=".txt,.md,.csv">
+  </div>
+  <div class="checklist-footer">
+    <span class="progress-text" id="cl-progress">0%</span>
+    <div class="progress-bar-wrap"><div class="progress-bar" id="cl-bar"></div></div>
+    <button class="reset-btn" id="cl-reset">RESET</button>
+  </div>
+</div>
+
+<!-- ── RIGHT SCREEN: MANUAL ── -->
+<div class="screen" id="screen-right">
+  <div class="panel-header">
+    <span class="panel-title">MANUAL</span>
+    <span class="panel-badge" id="manual-badge">READY</span>
+  </div>
+  <div class="manual-body" id="manual-body">
+    <div class="manual-placeholder upload-zone" id="manual-upload-zone" onclick="triggerManualUpload()" style="margin:16px; flex:1; width:calc(100% - 32px);">
+      <div class="upload-icon">📑</div>
+      <p>マニュアルをアップロード</p>
+      <small>画像 (JPG/PNG) または PDF</small>
+    </div>
+  </div>
+</div>
+
+<!-- Angle debug -->
+<div class="angle-display" id="angle-display" style="display:none;"></div>
+
+<!-- Demo bar (PC) -->
+<div id="demo-bar">
+  <label>🖥 デスクトップデモ：角度をスライダーで調整 &nbsp; <span id="slider-val">0°</span></label>
+  <input type="range" id="demo-slider" min="-90" max="90" value="0">
+</div>
+
+<script>
+  /* ─── STATE ─── */
+  const THRESHOLD = 20; // degrees
+  let currentScreen = 'center';
+  let checkItems = [];
+  let manualType = null; // 'images' | 'pdf'
+  let manualImages = [];
+  let manualPdfUrl = null;
+  let gyroAvailable = false;
+  let currentAngle = 0;
+
+  /* ─── DOM ─── */
+  const screens = {
+    center: document.getElementById('screen-center'),
+    left:   document.getElementById('screen-left'),
+    right:  document.getElementById('screen-right'),
+  };
+  const setupModal   = document.getElementById('setup-modal');
+  const permScreen   = document.getElementById('perm-screen');
+  const angleDisplay = document.getElementById('angle-display');
+  const demoBar      = document.getElementById('demo-bar');
+  const demoSlider   = document.getElementById('demo-slider');
+  const sliderVal    = document.getElementById('slider-val');
+
+  /* ─── SCREEN SWITCH ─── */
+  function showScreen(name) {
+    if (name === currentScreen) return;
+    currentScreen = name;
+    Object.entries(screens).forEach(([k, el]) => {
+      el.classList.toggle('active', k === name);
+    });
+  }
+
+  function updateFromAngle(angle) {
+    currentAngle = angle;
+    angleDisplay.textContent = `γ: ${Math.round(angle)}°`;
+    if (angle > THRESHOLD) showScreen('right');
+    else if (angle < -THRESHOLD) showScreen('left');
+    else showScreen('center');
+  }
+
+  /* ─── GYRO ─── */
+  function startGyro() {
+    window.addEventListener('deviceorientation', (e) => {
+      // gamma: left(-90) ~ right(+90) when phone held upright
+      const gamma = e.gamma ?? 0;
+      updateFromAngle(gamma);
+    });
+    gyroAvailable = true;
+    angleDisplay.style.display = 'block';
+  }
+
+  function initGyro() {
+    if (typeof DeviceOrientationEvent !== 'undefined' &&
+        typeof DeviceOrientationEvent.requestPermission === 'function') {
+      // iOS 13+
+      permScreen.classList.add('show');
+      document.getElementById('perm-btn').onclick = () => {
+        DeviceOrientationEvent.requestPermission().then(state => {
+          permScreen.classList.remove('show');
+          if (state === 'granted') { startGyro(); }
+          else { fallbackToDemo(); }
+        }).catch(() => { permScreen.classList.remove('show'); fallbackToDemo(); });
+      };
+    } else if ('DeviceOrientationEvent' in window) {
+      startGyro();
+      // If no events come within 2s → demo
+      setTimeout(() => { if (!gyroAvailable) fallbackToDemo(); }, 2000);
+    } else {
+      fallbackToDemo();
+    }
+  }
+
+  function fallbackToDemo() {
+    demoBar.classList.add('show');
+    demoSlider.addEventListener('input', () => {
+      const v = parseInt(demoSlider.value);
+      sliderVal.textContent = v + '°';
+      updateFromAngle(v);
+    });
+    angleDisplay.style.display = 'block';
+  }
+
+  /* ─── CHECKLIST ─── */
+  function parseChecklist(text) {
+    return text.split('\n')
+      .map(l => l.replace(/^[-*#\s\d.]+/, '').trim())
+      .filter(l => l.length > 0)
+      .map(label => ({ label, done: false }));
+  }
+
+  function renderChecklist() {
+    const wrap = document.getElementById('checklist-wrap');
+    const zone = document.getElementById('cl-upload-zone');
+
+    if (checkItems.length === 0) {
+      zone.style.display = 'flex';
+      return;
+    }
+    zone.style.display = 'none';
+
+    // Clear non-zone children
+    Array.from(wrap.children).forEach(c => {
+      if (c.id !== 'cl-upload-zone') c.remove();
+    });
+
+    checkItems.forEach((item, i) => {
+      const el = document.createElement('div');
+      el.className = 'check-item' + (item.done ? ' done' : '');
+      el.innerHTML = `<div class="check-box">${item.done ? '✓' : ''}</div><div class="check-label">${escHtml(item.label)}</div>`;
+      el.onclick = () => {
+        checkItems[i].done = !checkItems[i].done;
+        renderChecklist();
+        updateProgress();
+      };
+      wrap.appendChild(el);
+    });
+    updateProgress();
+  }
+
+  function updateProgress() {
+    const done = checkItems.filter(i => i.done).length;
+    const total = checkItems.length;
+    const pct = total ? Math.round(done / total * 100) : 0;
+    document.getElementById('cl-badge').textContent = `${done}/${total}`;
+    document.getElementById('cl-progress').textContent = pct + '%';
+    document.getElementById('cl-bar').style.width = pct + '%';
+  }
+
+  function loadChecklistText(text) {
+    checkItems = parseChecklist(text);
+    renderChecklist();
+  }
+
+  document.getElementById('cl-reset').onclick = () => {
+    checkItems.forEach(i => i.done = false);
+    renderChecklist();
+  };
+
+  // Live upload in left screen
+  document.getElementById('input-cl-live').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => loadChecklistText(ev.target.result);
+    r.readAsText(f, 'UTF-8');
+  });
+
+  /* ─── MANUAL ─── */
+  function triggerManualUpload() {
+    // Show mini menu - just trigger img for simplicity, PDF handled separately
+    document.getElementById('input-manual-live-img').click();
+  }
+
+  function renderManual() {
+    const body = document.getElementById('manual-body');
+    const zone = document.getElementById('manual-upload-zone');
+    // Remove existing content except zone
+    Array.from(body.children).forEach(c => {
+      if (c.id !== 'manual-upload-zone') c.remove();
+    });
+
+    if (manualType === 'images' && manualImages.length > 0) {
+      zone.style.display = 'none';
+      manualImages.forEach((src, i) => {
+        const img = document.createElement('img');
+        img.className = 'manual-img';
+        img.src = src;
+        img.alt = `ページ ${i+1}`;
+        body.appendChild(img);
+        if (manualImages.length > 1) {
+          const lbl = document.createElement('div');
+          lbl.className = 'manual-page-label';
+          lbl.textContent = `PAGE ${i+1} / ${manualImages.length}`;
+          body.appendChild(lbl);
+        }
+      });
+      document.getElementById('manual-badge').textContent = `${manualImages.length}P`;
+    } else if (manualType === 'pdf' && manualPdfUrl) {
+      zone.style.display = 'none';
+      const iframe = document.createElement('iframe');
+      iframe.className = 'pdf-frame';
+      iframe.src = manualPdfUrl;
+      body.appendChild(iframe);
+      document.getElementById('manual-badge').textContent = 'PDF';
+    } else {
+      zone.style.display = 'flex';
+    }
+  }
+
+  // Add hidden inputs for live manual upload in right screen
+  const liveImgInput = document.createElement('input');
+  liveImgInput.type = 'file'; liveImgInput.id = 'input-manual-live-img';
+  liveImgInput.accept = '.jpg,.jpeg,.png,.gif,.webp'; liveImgInput.multiple = true;
+  liveImgInput.style.display = 'none';
+  document.body.appendChild(liveImgInput);
+
+  const livePdfInput = document.createElement('input');
+  livePdfInput.type = 'file'; livePdfInput.id = 'input-manual-live-pdf';
+  livePdfInput.accept = '.pdf';
+  livePdfInput.style.display = 'none';
+  document.body.appendChild(livePdfInput);
+
+  // Override triggerManualUpload to show choice
+  function triggerManualUpload() {
+    // Show simple overlay
+    const c = confirm('画像ファイル → OK\nPDF → キャンセル');
+    if (c) liveImgInput.click();
+    else livePdfInput.click();
+  }
+
+  liveImgInput.addEventListener('change', e => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    manualImages = [];
+    manualType = 'images';
+    let loaded = 0;
+    files.forEach(f => {
+      const r = new FileReader();
+      r.onload = ev => {
+        manualImages.push(ev.target.result);
+        loaded++;
+        if (loaded === files.length) {
+          // sort by name
+          renderManual();
+        }
+      };
+      r.readAsDataURL(f);
+    });
+  });
+
+  livePdfInput.addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    manualType = 'pdf';
+    manualPdfUrl = URL.createObjectURL(f);
+    renderManual();
+  });
+
+  /* ─── SETUP MODAL ─── */
+  // Checklist text file
+  document.getElementById('input-checklist-txt').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = ev => {
+      document.getElementById('checklist-text').value = ev.target.result;
+    };
+    r.readAsText(f, 'UTF-8');
+    document.getElementById('btn-upload-checklist').classList.add('loaded');
+    document.getElementById('btn-upload-checklist').textContent = '✓ ' + f.name;
+  });
+
+  // Manual images (setup)
+  document.getElementById('input-manual-img').addEventListener('change', e => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    manualImages = [];
+    manualType = 'images';
+    let loaded = 0;
+    files.forEach(f => {
+      const r = new FileReader();
+      r.onload = ev => {
+        manualImages.push(ev.target.result);
+        loaded++;
+      };
+      r.readAsDataURL(f);
+    });
+    document.getElementById('btn-upload-manual-img').classList.add('loaded');
+    document.getElementById('btn-upload-manual-img').textContent = `✓ ${files.length}枚`;
+  });
+
+  // Manual PDF (setup)
+  document.getElementById('input-manual-pdf').addEventListener('change', e => {
+    const f = e.target.files[0]; if (!f) return;
+    manualType = 'pdf';
+    if (manualPdfUrl) URL.revokeObjectURL(manualPdfUrl);
+    manualPdfUrl = URL.createObjectURL(f);
+    document.getElementById('btn-upload-manual-pdf').classList.add('loaded');
+    document.getElementById('btn-upload-manual-pdf').textContent = '✓ ' + f.name;
+  });
+
+  // Start button
+  document.getElementById('start-btn').onclick = () => {
+    // Load checklist from textarea
+    const txt = document.getElementById('checklist-text').value.trim();
+    if (txt) loadChecklistText(txt);
+
+    // Render manual
+    renderManual();
+
+    // Hide modal
+    setupModal.style.display = 'none';
+
+    // Init gyro
+    initGyro();
+  };
+
+  /* ─── UTILS ─── */
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+</script>
+</body>
+</html>
